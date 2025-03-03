@@ -319,21 +319,21 @@ async def get_conversation(conversation_id: str):
         for msg in state.get("messages", []):
             # Get message type (role)
             msg_type = getattr(msg, "type", "unknown")
-            
-            # Get content (handle empty content)
-            content = getattr(msg, "content", "")
-            
-            # Get additional metadata
-            additional_kwargs = getattr(msg, "additional_kwargs", {})
-            
-            # Format message for response
-            formatted_msg = {
-                "role": msg_type,
-                "content": content,
-                "timestamp": additional_kwargs.get("timestamp", ""),
-                "metadata": additional_kwargs
-            }
-            messages.append(formatted_msg)
+            if msg_type != "tool":
+                # Get content (handle empty content)
+                content = getattr(msg, "content", "")
+                
+                # Get additional metadata
+                additional_kwargs = getattr(msg, "additional_kwargs", {})
+                if "function_call" not in additional_kwargs:
+                    # Format message for response
+                    formatted_msg = {
+                        "role": msg_type,
+                        "content": content,
+                        "timestamp": additional_kwargs.get("timestamp", ""),
+                        "metadata": additional_kwargs
+                    }
+                    messages.append(formatted_msg)
         
         # Prepare response
         response = {
@@ -373,6 +373,17 @@ async def get_document_history(conversation_id: str, document_type: str):
         if not revisions:
             logger.warning(f"No revisions found for {document_type} in conversation {conversation_id}")
             return {"revisions": []}
+        
+        # For each revision, get associated message content if available
+        for revision in revisions:
+            if revision.get("message_id"):
+                message_info = conversation_store.get_message_by_id(revision["message_id"])
+                if message_info:
+                    revision["message"] = {
+                        "content": message_info.get("content", ""),
+                        "role": message_info.get("role", ""),
+                        "timestamp": message_info.get("timestamp", "")
+                    }
         
         logger.info(f"Successfully retrieved {len(revisions)} {document_type} revisions for conversation: {conversation_id}")
         return {

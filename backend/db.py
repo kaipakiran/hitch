@@ -55,7 +55,7 @@ class SQLiteConversationStore:
             )
             ''')
             
-            # Create document revisions table
+            # Create document revisions table with message_id to link revisions to specific chat messages
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS document_revisions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,9 +64,18 @@ class SQLiteConversationStore:
                 content TEXT,
                 timestamp TIMESTAMP,
                 feedback TEXT,        -- The feedback that prompted this revision
-                FOREIGN KEY (conversation_id) REFERENCES conversations (conversation_id)
+                message_id INTEGER,   -- Reference to the message that triggered this revision
+                FOREIGN KEY (conversation_id) REFERENCES conversations (conversation_id),
+                FOREIGN KEY (message_id) REFERENCES messages (id)
             )
             ''')
+            
+            # Check if message_id column exists, add it if it doesn't
+            cursor.execute("PRAGMA table_info(document_revisions)")
+            columns = [column[1] for column in cursor.fetchall()]
+            if "message_id" not in columns:
+                cursor.execute("ALTER TABLE document_revisions ADD COLUMN message_id INTEGER")
+                logger.info("Added message_id column to document_revisions table")
             
             conn.commit()
             logger.info("Database schema initialized")
@@ -91,6 +100,12 @@ class SQLiteConversationStore:
             messages = state.get("messages", [])
             serializable_messages = []
             for msg in messages:
+                # Skip AI messages with empty content that aren't function calls
+                if (getattr(msg, "type", "") == "ai" and 
+                    not getattr(msg, "content", "") and 
+                    "function_call" not in getattr(msg, "additional_kwargs", {})):
+                    continue
+                    
                 msg_dict = {
                     "role": getattr(msg, "type", "unknown"),
                     "content": getattr(msg, "content", ""),
@@ -107,39 +122,67 @@ class SQLiteConversationStore:
             current_resume = state.get("optimized_resume", "")
             current_cover_letter = state.get("cover_letter", "")
             
+            # Clear existing messages and insert new ones
+            cursor.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
+            
+            # Insert messages and get their IDs
+            message_ids = []
+            for msg in serializable_messages:
+                cursor.execute('''
+                INSERT INTO messages (conversation_id, timestamp, role, content, metadata)
+                VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    conversation_id,
+                    now,
+                    msg["role"],
+                    msg["content"],
+                    msg["metadata"]
+                ))
+                message_ids.append(cursor.lastrowid)
+            
+            # Find the last human message and the last AI message with their IDs
+            last_human_message_id = None
+            last_human_content = ""
+            last_ai_message_id = None
+            
+            for i, msg in enumerate(serializable_messages):
+                if msg["role"] == "human":
+                    last_human_message_id = message_ids[i]
+                    last_human_content = msg["content"]
+                elif msg["role"] == "ai":
+                    last_ai_message_id = message_ids[i]
+            
             # Check for document updates and save revisions if needed
             if existing:
                 existing_id, existing_resume, existing_cover_letter = existing
                 
-                # Find the last human message to extract feedback
-                feedback = ""
-                for msg in reversed(messages):
-                    if getattr(msg, "type", "") == "human":
-                        feedback = getattr(msg, "content", "")
-                        break
+                # Use the last human message as feedback for document revisions
+                feedback = last_human_content
                 
                 # Check if resume was updated
                 if current_resume and existing_resume != current_resume:
                     logger.info(f"Detected resume update for conversation {conversation_id}")
                     self._save_document_revision(
-                        cursor, conversation_id, "resume", current_resume, now, feedback
+                        cursor, conversation_id, "resume", current_resume, now, feedback, last_ai_message_id
                     )
                 
                 # Check if cover letter was updated
                 if current_cover_letter and existing_cover_letter != current_cover_letter:
                     logger.info(f"Detected cover letter update for conversation {conversation_id}")
                     self._save_document_revision(
-                        cursor, conversation_id, "cover_letter", current_cover_letter, now, feedback
+                        cursor, conversation_id, "cover_letter", current_cover_letter, now, feedback, last_ai_message_id
                     )
             else:
                 # For new conversations, save initial versions if they exist
+                initial_message_id = message_ids[-1] if message_ids else None
+                
                 if current_resume:
                     self._save_document_revision(
-                        cursor, conversation_id, "resume", current_resume, now, "Initial version"
+                        cursor, conversation_id, "resume", current_resume, now, "Initial version", initial_message_id
                     )
                 if current_cover_letter:
                     self._save_document_revision(
-                        cursor, conversation_id, "cover_letter", current_cover_letter, now, "Initial version"
+                        cursor, conversation_id, "cover_letter", current_cover_letter, now, "Initial version", initial_message_id
                     )
             
             if existing:
@@ -185,21 +228,6 @@ class SQLiteConversationStore:
                 ))
                 logger.info(f"Created new conversation {conversation_id} in database")
             
-            # Clear existing messages and insert new ones
-            cursor.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
-            
-            for msg in serializable_messages:
-                cursor.execute('''
-                INSERT INTO messages (conversation_id, timestamp, role, content, metadata)
-                VALUES (?, ?, ?, ?, ?)
-                ''', (
-                    conversation_id,
-                    now,
-                    msg["role"],
-                    msg["content"],
-                    msg["metadata"]
-                ))
-            
             conn.commit()
             logger.info(f"Saved {len(serializable_messages)} messages for conversation {conversation_id}")
         except Exception as e:
@@ -210,13 +238,13 @@ class SQLiteConversationStore:
             if 'conn' in locals():
                 conn.close()
     
-    def _save_document_revision(self, cursor, conversation_id, document_type, content, timestamp, feedback):
-        """Save a document revision"""
+    def _save_document_revision(self, cursor, conversation_id, document_type, content, timestamp, feedback, message_id=None):
+        """Save a document revision with optional message_id"""
         cursor.execute('''
-        INSERT INTO document_revisions (conversation_id, document_type, content, timestamp, feedback)
-        VALUES (?, ?, ?, ?, ?)
-        ''', (conversation_id, document_type, content, timestamp, feedback))
-        logger.info(f"Saved {document_type} revision for conversation {conversation_id}")
+        INSERT INTO document_revisions (conversation_id, document_type, content, timestamp, feedback, message_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ''', (conversation_id, document_type, content, timestamp, feedback, message_id))
+        logger.info(f"Saved {document_type} revision for conversation {conversation_id} linked to message {message_id}")
     
     def get_document_revisions(self, conversation_id: str, document_type: str) -> List[Dict[str, Any]]:
         """Get revision history for a document"""
@@ -225,7 +253,7 @@ class SQLiteConversationStore:
             cursor = conn.cursor()
             
             cursor.execute('''
-            SELECT id, content, timestamp, feedback
+            SELECT id, content, timestamp, feedback, message_id
             FROM document_revisions
             WHERE conversation_id = ? AND document_type = ?
             ORDER BY timestamp ASC
@@ -237,6 +265,7 @@ class SQLiteConversationStore:
                     "content": row[1],
                     "timestamp": row[2],
                     "feedback": row[3],
+                    "message_id": row[4]
                 }
                 for row in cursor.fetchall()
             ]
@@ -246,6 +275,39 @@ class SQLiteConversationStore:
         except Exception as e:
             logger.error(f"Error retrieving document revisions: {str(e)}", exc_info=True)
             return []
+        finally:
+            if 'conn' in locals():
+                conn.close()
+    
+    def get_message_by_id(self, message_id: int) -> Optional[Dict[str, Any]]:
+        """Get a message by its ID"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+            SELECT id, conversation_id, timestamp, role, content, metadata
+            FROM messages
+            WHERE id = ?
+            ''', (message_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            message = {
+                "id": row[0],
+                "conversation_id": row[1],
+                "timestamp": row[2],
+                "role": row[3],
+                "content": row[4],
+                "metadata": json.loads(row[5]) if row[5] else {}
+            }
+            
+            return message
+        except Exception as e:
+            logger.error(f"Error retrieving message {message_id}: {str(e)}", exc_info=True)
+            return None
         finally:
             if 'conn' in locals():
                 conn.close()
@@ -280,20 +342,40 @@ class SQLiteConversationStore:
             state["optimized_resume"] = optimized_resume
             state["cover_letter"] = cover_letter
             
-            # Get messages
+            # Get messages with their IDs and any linked document revisions
             cursor.execute('''
-            SELECT role, content, metadata
+            SELECT id, role, content, metadata
             FROM messages
             WHERE conversation_id = ?
             ORDER BY id ASC
             ''', (conversation_id,))
             
+            message_rows = cursor.fetchall()
+            
+            # Get document revisions linked to messages
+            cursor.execute('''
+            SELECT message_id, document_type, id
+            FROM document_revisions
+            WHERE conversation_id = ? AND message_id IS NOT NULL
+            ''', (conversation_id,))
+            
+            # Create a mapping of message_id to document revisions
+            message_revisions = {}
+            for msg_id, doc_type, rev_id in cursor.fetchall():
+                if msg_id not in message_revisions:
+                    message_revisions[msg_id] = []
+                message_revisions[msg_id].append({"type": doc_type, "revision_id": rev_id})
+            
             from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
             
             messages = []
-            for role, content, metadata in cursor.fetchall():
+            for msg_id, role, content, metadata in message_rows:
                 # Convert back to LangChain message objects
                 metadata_dict = json.loads(metadata) if metadata else {}
+                
+                # Add document revision info to metadata if exists
+                if msg_id in message_revisions:
+                    metadata_dict["document_revisions"] = message_revisions[msg_id]
                 
                 if role == "human":
                     msg = HumanMessage(content=content, additional_kwargs=metadata_dict)
@@ -352,7 +434,10 @@ class SQLiteConversationStore:
             conn = self._get_connection()
             cursor = conn.cursor()
             
-            # Delete messages first (foreign key constraint)
+            # Delete document revisions first (foreign key constraint)
+            cursor.execute("DELETE FROM document_revisions WHERE conversation_id = ?", (conversation_id,))
+            
+            # Delete messages next (foreign key constraint)
             cursor.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
             
             # Delete conversation

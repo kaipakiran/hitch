@@ -69,7 +69,9 @@ def update_resume(resume: str, feedback: str) -> str:
     # Use direct model invocation to avoid dependency on parent_run_id
     try:
         # Fix: Use HumanMessage instead of SystemMessage
+        logger.info(f"Prompt: {prompt}")
         response = llm.invoke([HumanMessage(content=prompt)])
+        logger.info(f"Resume updated successfully, result: {response.content[:100]}")
         result = response.content.strip("`")
         logger.info(f"Resume updated successfully, result length: {len(result)}")
         

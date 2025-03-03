@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import datetime
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -55,6 +55,19 @@ class SQLiteConversationStore:
             )
             ''')
             
+            # Create document revisions table
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS document_revisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT,
+                document_type TEXT,  -- 'resume' or 'cover_letter'
+                content TEXT,
+                timestamp TIMESTAMP,
+                feedback TEXT,        -- The feedback that prompted this revision
+                FOREIGN KEY (conversation_id) REFERENCES conversations (conversation_id)
+            )
+            ''')
+            
             conn.commit()
             logger.info("Database schema initialized")
         except Exception as e:
@@ -71,8 +84,8 @@ class SQLiteConversationStore:
             cursor = conn.cursor()
             
             # First, check if conversation exists
-            cursor.execute("SELECT conversation_id FROM conversations WHERE conversation_id = ?", (conversation_id,))
-            exists = cursor.fetchone()
+            cursor.execute("SELECT conversation_id, optimized_resume, cover_letter FROM conversations WHERE conversation_id = ?", (conversation_id,))
+            existing = cursor.fetchone()
             
             # Convert LangChain message objects to serializable format
             messages = state.get("messages", [])
@@ -90,7 +103,46 @@ class SQLiteConversationStore:
             if "messages" in state_copy:
                 del state_copy["messages"]
             
-            if exists:
+            # Get current document versions
+            current_resume = state.get("optimized_resume", "")
+            current_cover_letter = state.get("cover_letter", "")
+            
+            # Check for document updates and save revisions if needed
+            if existing:
+                existing_id, existing_resume, existing_cover_letter = existing
+                
+                # Find the last human message to extract feedback
+                feedback = ""
+                for msg in reversed(messages):
+                    if getattr(msg, "type", "") == "human":
+                        feedback = getattr(msg, "content", "")
+                        break
+                
+                # Check if resume was updated
+                if current_resume and existing_resume != current_resume:
+                    logger.info(f"Detected resume update for conversation {conversation_id}")
+                    self._save_document_revision(
+                        cursor, conversation_id, "resume", current_resume, now, feedback
+                    )
+                
+                # Check if cover letter was updated
+                if current_cover_letter and existing_cover_letter != current_cover_letter:
+                    logger.info(f"Detected cover letter update for conversation {conversation_id}")
+                    self._save_document_revision(
+                        cursor, conversation_id, "cover_letter", current_cover_letter, now, feedback
+                    )
+            else:
+                # For new conversations, save initial versions if they exist
+                if current_resume:
+                    self._save_document_revision(
+                        cursor, conversation_id, "resume", current_resume, now, "Initial version"
+                    )
+                if current_cover_letter:
+                    self._save_document_revision(
+                        cursor, conversation_id, "cover_letter", current_cover_letter, now, "Initial version"
+                    )
+            
+            if existing:
                 # Update existing conversation
                 cursor.execute('''
                 UPDATE conversations SET
@@ -107,8 +159,8 @@ class SQLiteConversationStore:
                     state.get("job_description", ""),
                     state.get("resume", ""),
                     state.get("personal_summary", ""),
-                    state.get("optimized_resume", ""),
-                    state.get("cover_letter", ""),
+                    current_resume,
+                    current_cover_letter,
                     json.dumps(state_copy),
                     conversation_id
                 ))
@@ -127,8 +179,8 @@ class SQLiteConversationStore:
                     state.get("job_description", ""),
                     state.get("resume", ""),
                     state.get("personal_summary", ""),
-                    state.get("optimized_resume", ""),
-                    state.get("cover_letter", ""),
+                    current_resume,
+                    current_cover_letter,
                     json.dumps(state_copy)
                 ))
                 logger.info(f"Created new conversation {conversation_id} in database")
@@ -154,6 +206,46 @@ class SQLiteConversationStore:
             logger.error(f"Error saving conversation {conversation_id}: {str(e)}", exc_info=True)
             if 'conn' in locals():
                 conn.rollback()
+        finally:
+            if 'conn' in locals():
+                conn.close()
+    
+    def _save_document_revision(self, cursor, conversation_id, document_type, content, timestamp, feedback):
+        """Save a document revision"""
+        cursor.execute('''
+        INSERT INTO document_revisions (conversation_id, document_type, content, timestamp, feedback)
+        VALUES (?, ?, ?, ?, ?)
+        ''', (conversation_id, document_type, content, timestamp, feedback))
+        logger.info(f"Saved {document_type} revision for conversation {conversation_id}")
+    
+    def get_document_revisions(self, conversation_id: str, document_type: str) -> List[Dict[str, Any]]:
+        """Get revision history for a document"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+            SELECT id, content, timestamp, feedback
+            FROM document_revisions
+            WHERE conversation_id = ? AND document_type = ?
+            ORDER BY timestamp ASC
+            ''', (conversation_id, document_type))
+            
+            revisions = [
+                {
+                    "id": row[0],
+                    "content": row[1],
+                    "timestamp": row[2],
+                    "feedback": row[3],
+                }
+                for row in cursor.fetchall()
+            ]
+            
+            logger.info(f"Retrieved {len(revisions)} {document_type} revisions for conversation {conversation_id}")
+            return revisions
+        except Exception as e:
+            logger.error(f"Error retrieving document revisions: {str(e)}", exc_info=True)
+            return []
         finally:
             if 'conn' in locals():
                 conn.close()

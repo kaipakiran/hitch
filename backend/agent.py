@@ -125,7 +125,7 @@ def update_cover_letter(cover_letter: str, feedback: str) -> str:
     try:
         response = llm.invoke([HumanMessage(content=prompt)])
         logger.info("Cover letter updated successfully")
-        return response.content
+        return response.content.strip("`")
     except Exception as e:
         logger.error(f"Error during cover letter update: {str(e)}", exc_info=True)
         return f"Error updating cover letter: {str(e)}"
@@ -224,6 +224,70 @@ def handle_tool_results(state: AgentState):
     return {}
 
 
+# Add a new function to generate a response after tool execution
+def generate_tool_response(state: AgentState):
+    """Generate a response describing the action performed by the tool"""
+    logger.info("Generating response about tool execution")
+    
+    # Get information about what changed
+    messages = state["messages"]
+    job_description = state["job_description"]
+    resume = state["resume"]
+    optimized_resume = state.get("optimized_resume", "")
+    cover_letter = state.get("cover_letter", "")
+    
+    # Find the tool message (should be the most recent ToolMessage)
+    tool_message = None
+    tool_name = "unknown"
+    for msg in reversed(messages):
+        if isinstance(msg, ToolMessage):
+            tool_message = msg
+            tool_name = getattr(tool_message, "name", "unknown")
+            if not tool_name or tool_name == "unknown":
+                # Try to extract from tool_call_id
+                tool_call_id = getattr(tool_message, "tool_call_id", "")
+                if "update_resume" in tool_call_id:
+                    tool_name = "update_resume"
+                elif "update_cover_letter" in tool_call_id:
+                    tool_name = "update_cover_letter"
+            break
+    
+    if not tool_message:
+        logger.warning("No tool message found to generate response for")
+        return {"messages": [AIMessage(content="I've updated the document as requested.")]}
+    
+    # Find the user's request (previous HumanMessage)
+    user_request = ""
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            user_request = msg.content
+            break
+    
+    # Create prompt for the LLM to explain what was done
+    summary_prompt = f"""
+    You are a job application assistant. A user asked you to modify a document, and you need to explain what you did.
+    
+    User request: "{user_request}"
+    
+    Tool used: {tool_name}
+    
+    Document type: {"Resume" if "resume" in tool_name else "Cover Letter"}
+    Original Document: {resume if "resume" in tool_name else cover_letter}
+    Document after update: {tool_message.content}    
+    Create a brief, helpful response (1-3 sentences) explaining what you changed in the document based on their request.
+    Be specific about what was modified. Don't ask if they want to make more changes.
+    """
+    
+    # Call the LLM to generate an explanation
+    try:
+        response = llm.invoke([HumanMessage(content=summary_prompt)])
+        logger.info(f"Generated tool response: {response.content}")
+        return {"messages": [AIMessage(content=response.content)]}
+    except Exception as e:
+        logger.error(f"Error generating tool response: {str(e)}", exc_info=True)
+        return {"messages": [AIMessage(content="I've updated the document as requested.")]}
+
+
 # Create the graph using ToolNode
 def create_agent():
     logger.info("Creating agent workflow with ToolNode")
@@ -238,6 +302,9 @@ def create_agent():
     
     # Add node for handling tool results
     workflow.add_node("handle_tool_results", handle_tool_results)
+    
+    # Add new node for generating a response after tool execution
+    workflow.add_node("generate_tool_response", generate_tool_response)
     
     # Connect START to process_message
     workflow.add_edge(START, "process_message")
@@ -272,7 +339,6 @@ def create_agent():
                 has_tool_calls = True
         
         logger.info(f"Message has tool calls: {has_tool_calls}")
-        logger.info(f"Message: {last_message}")
         return "tools" if has_tool_calls else END
     
     # Connect process_message conditionally
@@ -288,9 +354,11 @@ def create_agent():
     # Connect tools to handle_tool_results
     workflow.add_edge("tools", "handle_tool_results")
     
-    # Connect handle_tool_results back to END (not to process_message)
-    # This prevents infinite loops and duplicate messages
-    workflow.add_edge("handle_tool_results", END)
+    # Connect handle_tool_results to generate_tool_response
+    workflow.add_edge("handle_tool_results", "generate_tool_response")
+    
+    # Connect generate_tool_response to END
+    workflow.add_edge("generate_tool_response", END)
     
     # Compile the graph
     agent = workflow.compile()

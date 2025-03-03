@@ -358,6 +358,32 @@ async def get_conversation(conversation_id: str):
         logger.error(f"Error retrieving conversation details: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/document_history/{conversation_id}/{document_type}")
+async def get_document_history(conversation_id: str, document_type: str):
+    """Get revision history for a document"""
+    logger.info(f"Retrieving {document_type} history for conversation: {conversation_id}")
+    
+    # Validate document_type
+    if document_type not in ["resume", "cover_letter"]:
+        raise HTTPException(status_code=400, detail="Invalid document type. Must be 'resume' or 'cover_letter'")
+    
+    try:
+        revisions = conversation_store.get_document_revisions(conversation_id, document_type)
+        
+        if not revisions:
+            logger.warning(f"No revisions found for {document_type} in conversation {conversation_id}")
+            return {"revisions": []}
+        
+        logger.info(f"Successfully retrieved {len(revisions)} {document_type} revisions for conversation: {conversation_id}")
+        return {
+            "conversation_id": conversation_id,
+            "document_type": document_type,
+            "revisions": revisions
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving document history: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Run the application
 if __name__ == "__main__":
     import uvicorn

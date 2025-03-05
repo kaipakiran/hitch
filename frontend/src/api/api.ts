@@ -62,12 +62,13 @@ export const sendChatMessage = async (message: ChatMessage) => {
 // Update a document (resume or cover letter)
 export const updateDocument = async (update: DocumentUpdate) => {
   try {
-    const response = await axios.post(`${API_URL}/update_document`, {
+    const response = await axios.post(`${API_URL}/update`, {
       conversation_id: update.conversation_id,
       document_type: update.document_type,
       content: update.content
     });
     return response.data;
+    
   } catch (error) {
     console.error('Error updating document:', error);
     throw error;

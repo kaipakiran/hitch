@@ -27,7 +27,7 @@ export const sendChatMessage = async (message) => {
 // Update a document (resume or cover letter)
 export const updateDocument = async (update) => {
   try {
-    const response = await axios.post(`${API_URL}/update_document`, {
+    const response = await axios.post(`${API_URL}/update`, {
       conversation_id: update.conversation_id,
       document_type: update.document_type,
       content: update.content

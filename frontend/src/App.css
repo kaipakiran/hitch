@@ -40,3 +40,19 @@
 .read-the-docs {
   color: #888;
 }
+
+.markdown-content {
+  text-align: left !important;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6,
+.markdown-content p,
+.markdown-content ul,
+.markdown-content ol {
+  text-align: left !important;
+}

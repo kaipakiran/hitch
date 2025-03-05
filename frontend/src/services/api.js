@@ -1,8 +1,8 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost:8000/api';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
-// Process a new job application
+// Process job application data
 export const processApplication = async (jobDescription, resume, personalSummary) => {
   try {
     const response = await axios.post(`${API_URL}/process`, {
@@ -12,80 +12,72 @@ export const processApplication = async (jobDescription, resume, personalSummary
     });
     return response.data;
   } catch (error) {
-    console.error('Error processing application:', error);
+    console.error('API Error processing application:', error.response?.data || error.message);
     throw error;
   }
 };
 
-// Send a chat message
-export const sendChatMessage = async (chatMessage) => {
-  try {
-    const response = await axios.post(`${API_URL}/chat`, {
-      conversation_id: chatMessage.conversation_id,
-      message: chatMessage.message
-    });
-    return response.data;
-  } catch (error) {
-    console.error('Error sending chat message:', error);
-    throw error;
-  }
-};
-
-// Update a document (resume or cover letter)
-export const updateDocument = async (update) => {
-  try {
-    const response = await axios.post(`${API_URL}/update_document`, {
-      conversation_id: update.conversation_id,
-      document_type: update.document_type,
-      content: update.content
-    });
-    return response.data;
-  } catch (error) {
-    console.error('Error updating document:', error);
-    throw error;
-  }
-};
-
-// Get document history
-export const getDocumentHistory = async (conversationId, documentType) => {
-  try {
-    const response = await axios.get(`${API_URL}/document_history/${conversationId}/${documentType}`);
-    return response.data;
-  } catch (error) {
-    console.error(`Error fetching ${documentType} history:`, error);
-    throw error;
-  }
-};
-
-// Get conversation details
-export const getConversation = async (conversationId) => {
+// Get conversation data by ID
+export const getConversationData = async (conversationId) => {
   try {
     const response = await axios.get(`${API_URL}/conversations/${conversationId}`);
     return response.data;
   } catch (error) {
-    console.error('Error fetching conversation:', error);
+    console.error('API Error fetching conversation:', error.response?.data || error.message);
     throw error;
   }
 };
 
-// Get all conversations
-export const getConversations = async () => {
+// Send a message in a conversation
+export const sendMessage = async (conversationId, message) => {
+  try {
+    const response = await axios.post(`${API_URL}/chat`, {
+      conversation_id: conversationId,
+      message: message
+    });
+    console.log('API: Send message response', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('API Error sending message:', error.response?.data || error.message);
+    throw error;
+  }
+};
+
+// Get list of conversations/past applications
+export const getConversationsList = async () => {
   try {
     const response = await axios.get(`${API_URL}/conversations`);
     return response.data;
   } catch (error) {
-    console.error('Error fetching conversations:', error);
+    console.error('API Error fetching conversations list:', error.response?.data || error.message);
     throw error;
   }
 };
 
-// Delete a conversation
-export const deleteConversation = async (conversationId) => {
+// Update document content
+export const updateDocument = async (conversationId, documentType, content) => {
   try {
-    const response = await axios.delete(`${API_URL}/conversations/${conversationId}`);
+    const response = await axios.post(`${API_URL}/update`, {
+      conversation_id: conversationId,
+      document_type: documentType,
+      content: content
+    });
     return response.data;
   } catch (error) {
-    console.error('Error deleting conversation:', error);
+    console.error('API Error updating document:', error.response?.data || error.message);
     throw error;
   }
-}; 
+};
+
+// Get document revision history
+export const getDocumentHistory = async (conversationId, documentType) => {
+  try {
+    const response = await axios.get(
+      `${API_URL}/document_history/${conversationId}/${documentType}`
+    );
+    return response.data;
+  } catch (error) {
+    console.error('API Error fetching document history:', error.response?.data || error.message);
+    throw error;
+  }
+};

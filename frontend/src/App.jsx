@@ -4,6 +4,9 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { Container, Alert } from 'react-bootstrap';
 import InputPage from './pages/InputPage';
 import ResultsPage from './pages/ResultsPage';
+import 'bootstrap/dist/css/bootstrap.min.css';
+import 'bootstrap-icons/font/bootstrap-icons.css';
+import './App.css';
 // import HomePage from './pages/HomePage';   
 
 // Simple error boundary component

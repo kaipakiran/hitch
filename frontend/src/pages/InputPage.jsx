@@ -1,155 +1,137 @@
 // src/pages/InputPage.jsx
-import { useState } from 'react';
+import React, { useState } from 'react';
+import { Container, Row, Col, Card, Alert, ProgressBar } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Container, 
-  Row,
-  Col,
-  Card,
-  Button,
-  Form,
-  Spinner,
-  Toast,
-  ToastContainer,
-  ProgressBar
-} from 'react-bootstrap';
 import JobDescriptionInput from '../components/JobDescriptionInput';
 import ResumeInput from '../components/ResumeInput';
 import PersonalSummaryInput from '../components/PersonalSummaryInput';
 import { processApplication } from '../services/api';
 
-const steps = [
-  { title: 'Job Description', description: 'Enter job details' },
-  { title: 'Resume', description: 'Enter your resume' },
-  { title: 'Personal Summary', description: 'Tell us about yourself' },
-];
-
 const InputPage = () => {
+  const [step, setStep] = useState(1);
   const [jobDescription, setJobDescription] = useState('');
   const [resume, setResume] = useState('');
   const [personalSummary, setPersonalSummary] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [activeStep, setActiveStep] = useState(0);
-  const [showToast, setShowToast] = useState(false);
-  const [toastMessage, setToastMessage] = useState({ title: '', description: '', variant: 'success' });
+  const [error, setError] = useState('');
   const navigate = useNavigate();
 
   const handleNext = () => {
-    setActiveStep((prevStep) => prevStep + 1);
+    setStep(prevStep => prevStep + 1);
   };
 
   const handleBack = () => {
-    setActiveStep((prevStep) => prevStep - 1);
-  };
-
-  const showToastMessage = (title, description, variant) => {
-    setToastMessage({ title, description, variant });
-    setShowToast(true);
+    setStep(prevStep => prevStep - 1);
   };
 
   const handleSubmit = async () => {
     setIsLoading(true);
+    setError('');
+    
     try {
       const response = await processApplication(jobDescription, resume, personalSummary);
       
-      // Save conversation ID and initial documents to localStorage
-      localStorage.setItem('conversationId', response.conversation_id);
-      localStorage.setItem('optimizedResume', response.optimized_resume);
-      localStorage.setItem('coverLetter', response.cover_letter);
-      
-      showToastMessage(
-        'Success',
-        'Your application has been processed successfully.',
-        'success'
-      );
-      
-      // Navigate to results page
-      navigate('/results');
-    } catch (error) {
-      console.error('Error processing application:', error);
-      showToastMessage(
-        'Error',
-        'Failed to process your application. Please try again.',
-        'danger'
+      if (response && response.conversation_id) {
+        navigate(`/results?conversation_id=${response.conversation_id}`);
+      } else {
+        setError('Server returned an invalid response. Please try again.');
+      }
+    } catch (err) {
+      setError(
+        err.response?.data?.detail || 
+        'Failed to process your application. Please try again.'
       );
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Calculate progress percentage
+  const progress = (step / 3) * 100;
+  
+  // Step titles
+  const stepTitles = [
+    "Job Description",
+    "Your Resume",
+    "Personal Summary"
+  ];
+
   return (
-    <Container className="py-4">
-      <Row className="mb-4">
-        <Col className="text-center">
-          <h1 className="mb-2">Job Application Assistant</h1>
-          <p className="text-muted">Optimize your resume and create a personalized cover letter</p>
-        </Col>
-      </Row>
-
-      <Row className="mb-4">
-        <Col>
-          <ProgressBar now={(activeStep + 1) * (100/steps.length)} className="mb-3" />
-          <div className="d-flex justify-content-between">
-            {steps.map((step, index) => (
-              <div key={index} className="text-center">
-                <div className={`rounded-circle d-flex align-items-center justify-content-center mx-auto mb-2 ${activeStep >= index ? 'bg-primary text-white' : 'bg-light text-muted'}`} style={{ width: '40px', height: '40px' }}>
-                  {activeStep > index ? '✓' : index + 1}
+    <Container className="py-5">
+      <Row className="justify-content-center">
+        <Col lg={8} md={10}>
+          <Card className="shadow border-0">
+            <Card.Header className="bg-primary text-white py-3">
+              <h3 className="mb-0">Job Application Assistant</h3>
+            </Card.Header>
+            
+            <Card.Body className="p-4">
+              {/* Progress indicator */}
+              <div className="mb-4">
+                <div className="d-flex justify-content-between mb-2">
+                  <span className="fw-bold">Step {step} of 3: {stepTitles[step-1]}</span>
+                  <span>{Math.round(progress)}%</span>
                 </div>
-                <div>
-                  <strong>{step.title}</strong>
-                  <div className="small text-muted">{step.description}</div>
-                </div>
+                <ProgressBar now={progress} animated variant="success" />
               </div>
-            ))}
-          </div>
+              
+              {error && (
+                <Alert variant="danger" className="mb-4">
+                  {error}
+                </Alert>
+              )}
+              
+              {step === 1 && (
+                <JobDescriptionInput 
+                  jobDescription={jobDescription}
+                  setJobDescription={setJobDescription}
+                  onNext={handleNext}
+                />
+              )}
+              
+              {step === 2 && (
+                <ResumeInput 
+                  resume={resume}
+                  setResume={setResume}
+                  onNext={handleNext}
+                  onBack={handleBack}
+                />
+              )}
+              
+              {step === 3 && (
+                <PersonalSummaryInput 
+                  personalSummary={personalSummary}
+                  setPersonalSummary={setPersonalSummary}
+                  onBack={handleBack}
+                  onSubmit={handleSubmit}
+                  isLoading={isLoading}
+                />
+              )}
+            </Card.Body>
+            
+            <Card.Footer className="bg-light border-0 p-3">
+              <div className="d-flex justify-content-center">
+                {[1, 2, 3].map((s) => (
+                  <div 
+                    key={s}
+                    className={`mx-2 rounded-circle d-flex align-items-center justify-content-center
+                      ${s === step ? 'bg-primary text-white' : s < step ? 'bg-success text-white' : 'bg-light'}
+                      ${s <= step ? 'border-0' : 'border'}`}
+                    style={{ 
+                      width: '40px', 
+                      height: '40px', 
+                      transition: 'all 0.3s ease',
+                      boxShadow: s === step ? '0 0 10px rgba(0,123,255,0.5)' : 'none'
+                    }}
+                  >
+                    {s < step ? '✓' : s}
+                  </div>
+                ))}
+              </div>
+            </Card.Footer>
+          </Card>
         </Col>
       </Row>
-
-      <Card className="shadow-sm">
-        <Card.Body className="p-4">
-          {activeStep === 0 && (
-            <JobDescriptionInput 
-              jobDescription={jobDescription} 
-              setJobDescription={setJobDescription} 
-              onNext={handleNext} 
-            />
-          )}
-          
-          {activeStep === 1 && (
-            <ResumeInput 
-              resume={resume} 
-              setResume={setResume} 
-              onNext={handleNext} 
-              onBack={handleBack} 
-            />
-          )}
-          
-          {activeStep === 2 && (
-            <PersonalSummaryInput 
-              personalSummary={personalSummary} 
-              setPersonalSummary={setPersonalSummary} 
-              onBack={handleBack} 
-              onSubmit={handleSubmit} 
-              isLoading={isLoading} 
-            />
-          )}
-        </Card.Body>
-      </Card>
-
-      <ToastContainer position="top-end" className="p-3">
-        <Toast 
-          show={showToast} 
-          onClose={() => setShowToast(false)} 
-          delay={3000} 
-          autohide
-          bg={toastMessage.variant}
-        >
-          <Toast.Header>
-            <strong className="me-auto">{toastMessage.title}</strong>
-          </Toast.Header>
-          <Toast.Body>{toastMessage.description}</Toast.Body>
-        </Toast>
-      </ToastContainer>
     </Container>
   );
 };

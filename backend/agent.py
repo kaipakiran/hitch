@@ -383,7 +383,7 @@ def create_initial_documents(job_description: str, resume: str, personal_summary
     Personal Summary: {personal_summary}
     
     Optimize the resume to highlight relevant skills and experience that match the job requirements.
-    Return the complete optimized resume. Do not include any other text or comments.
+    Return the complete optimized resume. Do not include any other text or comments. The format should be the same as the original resume. Render as well-formatted markdown. Don't put it in a code block.
     """
     
     # Fix: Use HumanMessage instead of SystemMessage for Gemini

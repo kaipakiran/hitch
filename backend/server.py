@@ -64,8 +64,8 @@ class ChatMessage(BaseModel):
 
 class UpdateRequest(BaseModel):
     conversation_id: str = Field(..., description="Unique conversation identifier")
-    update_type: str = Field(..., description="Type of update (resume or cover_letter)")
-    feedback: str = Field(..., description="User feedback for the update")
+    document_type: str = Field(..., description="Type of update (resume or cover_letter)")
+    content: str = Field(..., description="User provided content for the update")
 
 class ConversationResponse(BaseModel):
     conversation_id: str
@@ -123,6 +123,7 @@ async def process_application(input_data: JobApplicationInput):
     except Exception as e:
         logger.error(f"Error processing application: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/chat", response_model=ConversationResponse)
 async def chat(message_data: ChatMessage):
@@ -197,56 +198,41 @@ async def chat(message_data: ChatMessage):
 
 @app.post("/api/update", response_model=ConversationResponse)
 async def update_document(update_data: UpdateRequest):
-    """Update the resume or cover letter based on user feedback"""
-    logger.info(f"Received update request for conversation: {update_data.conversation_id}, type: {update_data.update_type}")
+    """Update the resume or cover letter with new content directly without LLM processing"""
+    conversation_id = update_data.conversation_id
+    document_type = update_data.document_type
+    content = update_data.content
+    
+    logger.info(f"Received direct update request for conversation: {conversation_id}, type: {document_type}")
+    
     try:
         # Get the conversation state from SQLite store
-        conversation_id = update_data.conversation_id
         state = conversation_store.get(conversation_id)
         
         if not state:
             logger.warning(f"Conversation not found: {conversation_id}")
             raise HTTPException(status_code=404, detail="Conversation not found")
         
-        # Create a message that will trigger the appropriate tool
-        if update_data.update_type == "resume":
-            message = f"Please update my resume with this feedback: {update_data.feedback}"
-            logger.info("Processing resume update request")
-        elif update_data.update_type == "cover_letter":
-            message = f"Please update my cover letter with this feedback: {update_data.feedback}"
-            logger.info("Processing cover letter update request")
+        # Update the appropriate document in the state directly
+        if document_type == "resume":
+            state["optimized_resume"] = content
+            logger.info("Updated resume content directly")
+        elif document_type == "cover_letter":
+            state["cover_letter"] = content
+            logger.info("Updated cover letter content directly")
         else:
-            logger.warning(f"Invalid update type: {update_data.update_type}")
-            raise HTTPException(status_code=400, detail="Invalid update type")
-        
-        # Add the new message
-        new_state = {
-            **state,
-            "messages": state["messages"] + [HumanMessage(content=message)]
-        }
-        
-        # Run the agent
-        logger.info(f"Invoking agent for document update in conversation: {conversation_id}")
-        result = agent.invoke(
-            new_state,
-            config={"configurable": {"thread_id": conversation_id}}
-        )
+            logger.warning(f"Invalid document type: {document_type}")
+            raise HTTPException(status_code=400, detail="Invalid document type")
         
         # Save updated state to SQLite store
-        updated_state = {
-            **new_state,
-            "messages": new_state["messages"] + result["messages"],
-            "optimized_resume": result.get("optimized_resume", new_state.get("optimized_resume", "")),
-            "cover_letter": result.get("cover_letter", new_state.get("cover_letter", ""))
-        }
-        conversation_store.set(conversation_id, updated_state)
+        conversation_store.set(conversation_id, state)
         
-        logger.info(f"Successfully processed document update for conversation: {conversation_id}")
+        logger.info(f"Successfully processed direct document update for conversation: {conversation_id}")
         return {
             "conversation_id": conversation_id,
-            "response": result["messages"][-1].content,
-            "optimized_resume": result.get("optimized_resume", state.get("optimized_resume", "")),
-            "cover_letter": result.get("cover_letter", state.get("cover_letter", ""))
+            "response": f"{document_type.replace('_', ' ').title()} updated successfully",
+            "optimized_resume": state.get("optimized_resume", ""),
+            "cover_letter": state.get("cover_letter", "")
         }
     except Exception as e:
         logger.error(f"Error updating document: {str(e)}", exc_info=True)
